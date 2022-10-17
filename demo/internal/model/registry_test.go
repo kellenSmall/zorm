@@ -1,6 +1,7 @@
-package demo
+package model
 
 import (
+	"database/sql"
 	"errors"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -10,11 +11,11 @@ func TestRegistry_get(t *testing.T) {
 	testCases := []struct {
 		name      string
 		val       any
-		wantModel *model
+		wantModel *Model
 		wantErr   error
 	}{
 		{
-			name:    "test model",
+			name:    "test Model",
 			val:     TestModel{},
 			wantErr: errors.New("orm: 只支持一级指针作为输入，例如 *User"),
 		},
@@ -22,20 +23,20 @@ func TestRegistry_get(t *testing.T) {
 			// 指针
 			name: "pointer",
 			val:  &TestModel{},
-			wantModel: &model{
-				tableName: "test_model",
-				fieldMap: map[string]*field{
+			wantModel: &Model{
+				TableName: "test_model",
+				FieldMap: map[string]*Field{
 					"Id": {
-						colName: "id",
+						ColName: "id",
 					},
 					"FirstName": {
-						colName: "first_name",
+						ColName: "first_name",
 					},
 					"Age": {
-						colName: "age",
+						ColName: "age",
 					},
 					"LastName": {
-						colName: "last_name",
+						ColName: "last_name",
 					},
 				},
 			},
@@ -71,7 +72,7 @@ func TestRegistry_get(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, err := r.get(tc.val)
+			m, err := r.Get(tc.val)
 			assert.Equal(t, tc.wantErr, err)
 			if err != nil {
 				return
@@ -111,4 +112,11 @@ func Test_underscoreName(t *testing.T) {
 			assert.Equal(t, tc.wantStr, res)
 		})
 	}
+}
+
+type TestModel struct {
+	Id        int64
+	FirstName string
+	Age       int8
+	LastName  *sql.NullString
 }

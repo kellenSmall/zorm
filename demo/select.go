@@ -3,15 +3,28 @@ package demo
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
+	"zorm/demo/internal/errs"
+	model2 "zorm/demo/internal/model"
 )
 
+type Selectable interface {
+	selectable()
+}
+
 type Selector[T any] struct {
-	sb    strings.Builder
-	table string
-	where []Predicate
-	args  []any
+	sb      strings.Builder
+	table   string
+	where   []Predicate
+	args    []any
+	columns []Selectable
+	model   *model2.Model
+	db      *DB
+}
+
+func (s *Selector[T]) Select(cols ...Selectable) *Selector[T] {
+	s.columns = cols
+	return s
 }
 
 func (s *Selector[T]) From(table string) *Selector[T] {
@@ -20,8 +33,18 @@ func (s *Selector[T]) From(table string) *Selector[T] {
 }
 
 func (s *Selector[T]) Get(ctx context.Context) (*T, error) {
-	//TODO implement me
-	panic("implement me")
+	q, err := s.Build()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.db.QueryContext(ctx, q.SQL, q.Args...)
+	if err != nil {
+		return nil, err
+	}
+	t := new(T)
+	val := s.db.valCreator(t, s.model)
+
+	return t, val.SetColumns(rows)
 }
 
 func (s *Selector[T]) GetMulti(ctx context.Context) ([]*T, error) {
@@ -30,29 +53,70 @@ func (s *Selector[T]) GetMulti(ctx context.Context) ([]*T, error) {
 }
 
 func (s *Selector[T]) Build() (*Query, error) {
-	s.sb.WriteString("SELECT * FROM ")
+	t := new(T)
+	var err error
+	s.model, err = s.db.r.Get(t)
+	if err != nil {
+		return nil, err
+	}
+	s.sb.WriteString("SELECT ")
+	if len(s.columns) == 0 {
+		s.sb.WriteByte('*')
+	} else {
+		for i, c := range s.columns {
+			if i > 0 {
+				s.sb.WriteByte(',')
+			}
+			switch col := c.(type) {
+			case Column:
+				fd, ok := s.model.FieldMap[col.name]
+				if !ok {
+					return nil, errs.NewErrUnknownColumn(col.name)
+				}
+				s.sb.WriteByte('`')
+				s.sb.WriteString(fd.ColName)
+				s.sb.WriteByte('`')
+			case Aggregate:
+				s.sb.WriteString(col.fn)
+				s.sb.WriteByte('(')
+				fd, ok := s.model.FieldMap[col.arg]
+				if !ok {
+					return nil, errs.NewErrUnknownColumn(col.arg)
+				}
+				s.sb.WriteByte('`')
+				s.sb.WriteString(fd.ColName)
+				s.sb.WriteByte('`')
+				s.sb.WriteByte(')')
+			case RawExpr:
+				s.sb.WriteString(col.raw)
+				if len(col.args) > 0 {
+					s.args = append(s.args, col.args...)
+				}
+			}
+		}
+	}
+	s.sb.WriteString(" FROM ")
+
 	if s.table == "" {
-		var t T
-		typ := reflect.TypeOf(t)
-		goName := typ.Name()
 		s.sb.WriteByte('`')
-		s.sb.WriteString(goName)
+		s.sb.WriteString(s.model.TableName)
 		s.sb.WriteByte('`')
 	} else {
 		s.sb.WriteString(s.table)
 	}
+	// 构造 WHERE
 	if len(s.where) > 0 {
+		// 类似这种可有可无的部分，都要在前面加一个空格
 		s.sb.WriteString(" WHERE ")
 		p := s.where[0]
 		for i := 1; i < len(s.where); i++ {
 			p = p.And(s.where[i])
 		}
-
 		if err := s.buildExpression(p); err != nil {
 			return nil, err
 		}
 	}
-	s.sb.WriteByte(';')
+	s.sb.WriteString(";")
 	return &Query{
 		SQL:  s.sb.String(),
 		Args: s.args,
@@ -109,6 +173,8 @@ func (s *Selector[T]) buildExpression(p Expression) error {
 	return nil
 }
 
-func NewSelector[T any]() *Selector[T] {
-	return &Selector[T]{}
+func NewSelector[T any](db *DB) *Selector[T] {
+	return &Selector[T]{
+		db: db,
+	}
 }
